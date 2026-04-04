@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker Compose para DESARROLLO
+# Solo levanta la BD — el backend y frontend corren con npm run dev
+#
+# Uso:
+#   docker compose -f docker-compose.dev.yml up -d
+#   cd backend && npm run dev
+#   cd frontend && npm run dev
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: callscript_db_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       callcenter_db
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword123}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./backend/src/config/migrations.sql:/docker-entrypoint-initdb.d/01_migrations.sql:ro
+      - ./backend/src/config/add_indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
+    ports:
+      # Expuesto en 5432 para que npm run dev conecte directamente
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout:  3s
+      retries:  5
+
+volumes:
+  postgres_dev_data:
+    name: callscript_postgres_dev

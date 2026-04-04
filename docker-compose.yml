@@ -1,0 +1,110 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CallScript AI — Docker Compose
+#
+# Servicios:
+#   db       → PostgreSQL 16
+#   backend  → API Node.js/Express (puerto 3001)
+#   frontend → React + Nginx (puerto 80)
+#
+# Uso:
+#   Levantar:    docker compose up -d
+#   Ver logs:    docker compose logs -f backend
+#   Detener:     docker compose down
+#   Reset BD:    docker compose down -v && docker compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Base de datos PostgreSQL ─────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: callscript_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-callcenter_db}
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # Datos persistentes — sobreviven a docker compose down
+      - postgres_data:/var/lib/postgresql/data
+      # Ejecuta migraciones al primer arranque
+      - ./backend/src/config/migrations.sql:/docker-entrypoint-initdb.d/01_migrations.sql:ro
+      - ./backend/src/config/add_indexes.sql:/docker-entrypoint-initdb.d/02_indexes.sql:ro
+    ports:
+      # Solo expone en localhost — no accesible desde internet
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-callcenter_db}"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+      start_period: 15s
+    networks:
+      - callscript_network
+
+  # ── API Backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context:    ./backend
+      dockerfile: Dockerfile
+      target:     production
+    container_name: callscript_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV:        production
+      PORT:            3001
+      DATABASE_URL:    postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-callcenter_db}
+      JWT_SECRET:      ${JWT_SECRET}
+      LOG_LEVEL:       ${LOG_LEVEL:-info}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Solo expuesto en localhost — Nginx hace de proxy para el mundo exterior
+      - "127.0.0.1:3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3001/api/health', r => r.statusCode===200?process.exit(0):process.exit(1))\""]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+      start_period: 20s
+    networks:
+      - callscript_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Frontend React + Nginx ────────────────────────────────────────────────
+  frontend:
+    build:
+      context:    ./frontend
+      dockerfile: Dockerfile
+      target:     production
+    container_name: callscript_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - callscript_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+# ── Volúmenes persistentes ───────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    name: callscript_postgres_data
+
+# ── Red interna ───────────────────────────────────────────────────────────────
+networks:
+  callscript_network:
+    name: callscript_network
+    driver: bridge
